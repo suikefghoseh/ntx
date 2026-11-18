@@ -34,6 +34,9 @@ jobs:
           git -C code checkout -q FETCH_HEAD
 
       - name: Collect
+        env:
+          # YouTube Data API key; when the secret is missing the YouTube feeds are simply left out.
+          YT_API_KEY: ${{ secrets.YT_API_KEY }}
         run: |
           mkdir data
           python3 code/collect.py data/feeds.json

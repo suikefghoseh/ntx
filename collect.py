@@ -6,6 +6,7 @@ import html
 import http.client
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -41,15 +42,20 @@ NEWS = (
     ("D", '"animated movie" OR "family movie" trailer'),
     ("D", '"youtube kids" OR "kids youtuber" OR "kids channel"'),
 )
+# YouTube Data API key, from the repository secret of the same name. Without it the YouTube feeds are left out.
+YT_KEY = os.environ.get("YT_API_KEY", "").strip()
+# Shorts searches cost 100 of the 10,000 free quota units a day each, so every run does one half: even hours, odd hours.
+YT_SEARCHES = (("brainrot", "tiktok trend", "roblox #shorts"), ("dance challenge", "toys #shorts", "meme #shorts"))
 
 
 def clean(text, limit):
     return " ".join(str(text or "").replace("|", "/").split())[:limit]
 
 
-def fetch(url, head=0):
+def fetch(url, head=0, extra=None):
     """The body of a URL. With head, only about that many bytes from its start are wanted, so a cut-off download will do."""
     headers = {"User-Agent": UA, "Accept": "*/*"}
+    headers.update(extra or {})
     if head:
         headers["Range"] = "bytes=0-" + str(head - 1)
     request = urllib.request.Request(url, headers=headers)
@@ -249,6 +255,63 @@ def fortnite_shop(now):
             for name, (count, longest) in ranked]
 
 
+def youtube(path):
+    # The key travels in a header, never in the address, so it cannot end up in an error message or a log.
+    return json.loads(fetch("https://www.googleapis.com/youtube/v3/" + path, extra={"X-Goog-Api-Key": YT_KEY}))
+
+
+def seconds_of(duration):
+    """Seconds in an ISO 8601 duration such as PT1M5S."""
+    match = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", str(duration or ""))
+    if not match:
+        return 0
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def compact(count):
+    return f"{count / 1e6:.1f}M" if count >= 1e6 else f"{count / 1e3:.0f}K" if count >= 1e3 else str(count)
+
+
+def video_lines(items, now, limit, longest=0, english=False):
+    """One line per video, most viewed first: title (channel, views, age)."""
+    rows = []
+    for item in items:
+        info = item.get("snippet") or {}
+        title = clean(info.get("title"), 90)
+        languages = [str(info.get(name)).lower() for name in ("defaultAudioLanguage", "defaultLanguage") if info.get(name)]
+        foreign = sum(1 for letter in title if letter.isalpha() and ord(letter) > 0x24F)   # letters outside the Latin alphabet
+        if not title or (english and (foreign >= 3 or (languages and not any(code.startswith("en") for code in languages)))):
+            continue
+        if longest and seconds_of((item.get("contentDetails") or {}).get("duration")) > longest:
+            continue
+        try:
+            age = int((now - datetime.datetime.fromisoformat(str(info.get("publishedAt")).replace("Z", "+00:00"))).total_seconds() // 3600)
+        except (TypeError, ValueError):
+            age = None
+        views = number((item.get("statistics") or {}).get("viewCount"))
+        rows.append((views, title + " (" + clean(info.get("channelTitle"), 30) + ", " + compact(views) + " views" + ("" if age is None else ", " + str(age) + "h old") + ")"))
+    rows.sort(key=lambda pair: -pair[0])
+    return [line for _, line in rows[:limit]]
+
+
+def youtube_trending(now):
+    videos = youtube("videos?part=snippet,contentDetails,statistics&chart=mostPopular&regionCode=US&maxResults=50")
+    return video_lines(videos.get("items") or [], now, 20)
+
+
+def youtube_shorts(query, now):
+    """The most viewed videos of up to 3 minutes posted in the last 48 hours that match a search."""
+    after = (now - datetime.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    found = youtube("search?part=id&type=video&videoDuration=short&order=viewCount&regionCode=US&relevanceLanguage=en&maxResults=25"
+                    + "&publishedAfter=" + urllib.parse.quote(after) + "&q=" + urllib.parse.quote(query))
+    ids = [item["id"]["videoId"] for item in found.get("items") or [] if (item.get("id") or {}).get("videoId")]
+    if not ids:
+        return []
+    videos = youtube("videos?part=snippet,contentDetails,statistics&maxResults=50&id=" + ",".join(ids))
+    return video_lines(videos.get("items") or [], now, 10, longest=180, english=True)
+
+
 def main(out_path):
     now = datetime.datetime.now(UTC)
     jobs = [
@@ -268,6 +331,10 @@ def main(out_path):
         ("D", "Top free iPad games US (younger children play on tablets)", lambda: itunes("topfreeipadapplications/limit=15/genre=6014", False)),
         ("D", "BBC Newsround, news written for 6 to 12 year olds", lambda: rss("https://feeds.bbci.co.uk/newsround/rss.xml", 10, now, 72, ("Watch Newsround",))),
     ]
+    if YT_KEY:
+        jobs.append(("BC", "YouTube trending in the US now (channel, views, age)", lambda: youtube_trending(now)))
+        for query in YT_SEARCHES[now.hour % 2]:
+            jobs.append(("A", "YouTube Shorts, most viewed of the last 48 hours for the search: " + query, lambda query=query: youtube_shorts(query, now)))
     for focus, query in NEWS:
         jobs.append((focus, "Google News, last 24h: " + query, lambda query=query: news(query, now)))
     feeds, failed = [], []
@@ -278,7 +345,7 @@ def main(out_path):
             failed.append(label + " (" + type(error).__name__ + ")")
             continue
         feeds.append({"label": label, "focus": focus, "items": items})
-    print("feeds read:", len(feeds), "| failed:", "; ".join(failed) or "none")
+    print("feeds read:", len(feeds), "| failed:", "; ".join(failed) or "none", "| YouTube key:", "set" if YT_KEY else "not set")
     if not any(feed["items"] for feed in feeds):
         sys.exit("every feed failed or was empty: nothing written")
     with open(out_path, "w", encoding="utf-8") as handle:
