@@ -3,6 +3,7 @@ name: collect
 on:
   schedule:
     # Hourly, 25 minutes before the Hype Radar scout runs, off the busy top of the hour.
+    # GitHub starts these late and drops some slots when it is busy (gaps of two hours seen on 2026-11-18).
     - cron: "47 * * * *"
   workflow_dispatch:
   push:
