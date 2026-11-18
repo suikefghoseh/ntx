@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Collects public trend feeds into one JSON file for the Hype Radar scout. Standard library only."""
+import csv
 import datetime
+import html
+import io
 import json
 import re
 import sys
@@ -13,12 +16,17 @@ from email.utils import parsedate_to_datetime
 UTC = datetime.timezone.utc
 UA = "Mozilla/5.0 (compatible; trend-feed-collector/1.0)"
 WIKI_SKIP = ("Special:", "Wikipedia:", "Portal:", "File:", "Help:", "Category:", "Template:", "Talk:", "User:")
-# Google News searches of the last 24 hours. The letter is the scout's focus area; "" is shown on every run.
+# Google News searches of the last 24 hours. The letters are the scout's focus areas (A short-form video, B screen and
+# music, C games, creators and fads, D what 5 to 8 year olds like); "" is shown on every run.
 NEWS = (
     ("", '"gen z" OR "gen alpha" trend'),
     ("A", '"tiktok trend"'),
     ("A", "viral meme"),
     ("A", '"going viral" tiktok'),
+    ("A", "brainrot"),
+    ("A", '"youtube shorts" trend OR viral'),
+    ("A", '"tiktok sound" OR "tiktok song" OR "tiktok dance"'),
+    ("A", 'slang "gen alpha" OR "gen z" meaning'),
     ("B", "new trailer"),
     ("B", '"box office"'),
     ("B", "anime new season"),
@@ -27,6 +35,10 @@ NEWS = (
     ("C", "fortnite OR minecraft"),
     ("C", "youtuber OR streamer viral"),
     ("C", "viral toy OR collectible"),
+    ("D", 'cartoon OR "kids show" new season OR episodes'),
+    ("D", '"hottest toys" OR "toy craze" OR "must-have toy"'),
+    ("D", '"animated movie" OR "family movie" trailer'),
+    ("D", '"youtube kids" OR "kids youtuber" OR "kids channel"'),
 )
 
 
@@ -59,6 +71,20 @@ def hours_ago(text, now):
 def traffic_number(text):
     match = re.match(r"(\d+(?:\.\d+)?)\s*([KM]?)", text.replace(",", "").upper())
     return float(match.group(1)) * {"": 1, "K": 1e3, "M": 1e6}[match.group(2)] if match else 0
+
+
+def number(text):
+    try:
+        return int(re.sub(r"[^\d-]", "", str(text or "")))
+    except ValueError:
+        return 0
+
+
+def words_of(markup):
+    """The visible pieces of text in a piece of HTML, in order."""
+    markup = re.sub(r"(?s)<(svg|script|style)\b.*?</\1>", " ", markup)
+    pieces = (" ".join(html.unescape(piece).split()) for piece in re.split(r"<[^>]+>", markup))
+    return [piece for piece in pieces if piece]
 
 
 def google_trends(geo):
@@ -104,14 +130,16 @@ def itunes(path, with_artist):
     return out
 
 
-def rss(url, limit, now, max_hours):
+def rss(url, limit, now, max_hours, skip=()):
     root = ET.fromstring(fetch(url))
     out = []
     for item in root.iter("item"):
+        title = clean(item.findtext("title"), 110)
         age = hours_ago(item.findtext("pubDate"), now)
-        if age is not None and age > max_hours:
+        if not title or title.startswith(skip) or (age is not None and age > max_hours):
             continue
-        out.append(clean(item.findtext("title"), 110) + (" (" + str(age) + "h ago)" if age is not None else ""))
+        when = "" if age is None else " (" + (str(age) + "h ago)" if age < 48 else str(age // 24) + "d ago)")
+        out.append(title + when)
         if len(out) == limit:
             break
     return out
@@ -123,6 +151,92 @@ def news(query, now):
     return rss(url, 6, now, 30)
 
 
+def tokchart(path, limit):
+    """Rows of a tokchart.com chart: the name, then the page's other columns in brackets."""
+    page = fetch("https://tokchart.com/" + path).decode("utf-8", "replace")
+    body = re.search(r"(?s)<tbody[^>]*>(.*?)</tbody>", page)
+    out = []
+    for row in re.findall(r"(?s)<tr\b[^>]*>(.*?)</tr>", body.group(1) if body else ""):
+        cells = [cell for cell in words_of(row) if not cell.startswith(("↑", "↓"))]
+        for _ in range(2):   # the rank, then the places moved since yesterday
+            if cells and re.fullmatch(r"[\d,]+|[–—-]", cells[0]):
+                cells = cells[1:]
+        if cells:
+            out.append(clean(cells[0], 70) + (" (" + clean(", ".join(cells[1:]), 90) + ")" if len(cells) > 1 else ""))
+        if len(out) == limit:
+            break
+    if not out:
+        raise ValueError("no chart rows on the page")
+    return out
+
+
+def shazam(limit):
+    text = fetch("https://www.shazam.com/services/charts/csv/top-200/united-states").decode("utf-8-sig", "replace")
+    out = []
+    for row in csv.reader(io.StringIO(text)):
+        if len(row) >= 3 and row[0].strip().isdigit():
+            out.append(row[0].strip() + ". " + clean(row[2], 60) + " - " + clean(row[1], 40))
+            if len(out) == limit:
+                break
+    if not out:
+        raise ValueError("no chart rows in the file")
+    return out
+
+
+def spotify_gainers(limit):
+    """The songs of the Spotify US daily chart that gained the most plays since the day before."""
+    page = fetch("https://kworb.net/spotify/country/us_daily.html").decode("utf-8", "replace")
+    rows = []
+    for row in re.findall(r"(?s)<tr\b[^>]*>(.*?)</tr>", page):
+        cells = [" ".join(words_of(cell)) for cell in re.findall(r"(?s)<td\b[^>]*>(.*?)</td>", row)]
+        if len(cells) >= 8 and cells[0].isdigit() and number(cells[7]) > 0:
+            rows.append(cells)
+    if not rows:
+        raise ValueError("no chart rows on the page")
+    rows.sort(key=lambda cells: -number(cells[7]))
+    return [clean(cells[2], 80) + " (#" + cells[0] + ", " + cells[6] + " plays a day, " + cells[7] + ")" for cells in rows[:limit]]
+
+
+def netflix():
+    text = fetch("https://www.netflix.com/tudum/top10/data/all-weeks-global.tsv").decode("utf-8", "replace")
+    week, out = None, []
+    for row in csv.DictReader(io.StringIO(text), delimiter="\t", quoting=csv.QUOTE_NONE):
+        week = week or row.get("week")
+        if row.get("week") != week:
+            break   # the file starts with the latest week
+        kind = str(row.get("category") or "")
+        if kind not in ("Films (English)", "TV (English)"):
+            continue
+        season = str(row.get("season_title") or "")
+        name = clean(season if season not in ("", "N/A") else row.get("show_title"), 70)
+        out.append(kind.split(" ")[0] + " " + str(row.get("weekly_rank")) + ". " + name + " (" + format(number(row.get("weekly_views")), ",")
+                   + " views, week " + str(row.get("cumulative_weeks_in_top_10")) + " in the top 10)")
+    if not out:
+        raise ValueError("no rows for the latest week")
+    return out
+
+
+def fortnite_shop(now):
+    """The sets on sale in today's Fortnite item shop, biggest first; most are brand, music or anime collabs."""
+    entries = json.loads(fetch("https://fortnite-api.com/v2/shop"))["data"]["entries"]
+    sets = {}
+    for entry in entries:
+        name = clean((entry.get("layout") or {}).get("name"), 50)
+        if not name or name == "Jam Tracks":
+            continue
+        try:
+            hours = (now - datetime.datetime.fromisoformat(str(entry.get("inDate")).replace("Z", "+00:00"))).total_seconds() / 3600
+        except (TypeError, ValueError):
+            hours = None
+        count, longest = sets.get(name, (0, None))
+        sets[name] = (count + 1, hours if longest is None or (hours is not None and hours > longest) else longest)
+    if not sets:
+        raise ValueError("no sets in the shop")
+    ranked = sorted(sets.items(), key=lambda pair: (-pair[1][0], pair[0]))[:25]
+    return [name + " (" + str(count) + (" items" if count > 1 else " item") + (", new in the shop" if longest is not None and longest < 72 else "") + ")"
+            for name, (count, longest) in ranked]
+
+
 def main(out_path):
     now = datetime.datetime.now(UTC)
     jobs = [
@@ -132,6 +246,15 @@ def main(out_path):
         ("", "Apple top songs US", lambda: itunes("topsongs/limit=15", True)),
         ("", "Top free iPhone games US", lambda: itunes("topfreeapplications/limit=15/genre=6014", False)),
         ("", "Know Your Meme newsfeed", lambda: rss("https://knowyourmeme.com/newsfeed.rss", 12, now, 96)),
+        ("A", "TikTok hashtags growing fastest this week, worldwide (growth)", lambda: tokchart("tiktok-trending-hashtags", 10)),
+        ("A", "TikTok songs trending in the US today (artist, genre, new videos a day, growth)", lambda: tokchart("tiktok-trending-songs/united-states", 10)),
+        ("A", "Shazam US top 15 of the last 7 days (songs people hear in videos and look up)", lambda: shazam(15)),
+        ("A", "Know Your Meme, memes confirmed in the last 30 days", lambda: rss("https://knowyourmeme.com/memes.rss", 12, now, 720)),
+        ("B", "Spotify US, songs that gained the most plays since yesterday", lambda: spotify_gainers(12)),
+        ("BD", "Netflix worldwide top 10 of last week, English films and series", netflix),
+        ("C", "Fortnite item shop today, sets on sale (collabs show which brands, artists and anime teens buy into)", lambda: fortnite_shop(now)),
+        ("D", "Top free iPad games US (younger children play on tablets)", lambda: itunes("topfreeipadapplications/limit=15/genre=6014", False)),
+        ("D", "BBC Newsround, news written for 6 to 12 year olds", lambda: rss("https://feeds.bbci.co.uk/newsround/rss.xml", 10, now, 72, ("Watch Newsround",))),
     ]
     for focus, query in NEWS:
         jobs.append((focus, "Google News, last 24h: " + query, lambda query=query: news(query, now)))
