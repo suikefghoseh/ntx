@@ -312,6 +312,21 @@ def youtube_shorts(query, now):
     return video_lines(videos.get("items") or [], now, 10, longest=180, english=True)
 
 
+def carried_youtube(now):
+    """(feeds, time) of the YouTube feeds in the published file while they are under 50 minutes old, else None.
+    The searches use most of the day's free quota at one round an hour, and this workflow can start more often than that."""
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo:
+        return None
+    try:
+        old = json.loads(fetch("https://raw.githubusercontent.com/" + repo + "/data/feeds.json"))
+        then = datetime.datetime.strptime(str(old["youtube_at"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        feeds = [feed for feed in old["feeds"] if str(feed.get("label") or "").startswith("YouTube ") and feed.get("items")]
+    except Exception:   # no published file yet, no YouTube feeds in it, or it cannot be read: collect afresh
+        return None
+    return (feeds, str(old["youtube_at"])) if feeds and 0 <= (now - then).total_seconds() < 50 * 60 else None
+
+
 def main(out_path):
     now = datetime.datetime.now(UTC)
     jobs = [
@@ -331,7 +346,8 @@ def main(out_path):
         ("D", "Top free iPad games US (younger children play on tablets)", lambda: itunes("topfreeipadapplications/limit=15/genre=6014", False)),
         ("D", "BBC Newsround, news written for 6 to 12 year olds", lambda: rss("https://feeds.bbci.co.uk/newsround/rss.xml", 10, now, 72, ("Watch Newsround",))),
     ]
-    if YT_KEY:
+    kept = carried_youtube(now) if YT_KEY else None
+    if YT_KEY and not kept:
         jobs.append(("BC", "YouTube trending in the US now (channel, views, age)", lambda: youtube_trending(now)))
         for query in YT_SEARCHES[now.hour % 2]:
             jobs.append(("A", "YouTube Shorts, most viewed of the last 48 hours for the search: " + query, lambda query=query: youtube_shorts(query, now)))
@@ -345,11 +361,16 @@ def main(out_path):
             failed.append(label + " (" + type(error).__name__ + ")")
             continue
         feeds.append({"label": label, "focus": focus, "items": items})
-    print("feeds read:", len(feeds), "| failed:", "; ".join(failed) or "none", "| YouTube key:", "set" if YT_KEY else "not set")
+    youtube_at = now.strftime("%Y-%m-%dT%H:%M:%SZ") if any(feed["label"].startswith("YouTube ") for feed in feeds) else ""
+    if kept:
+        feeds += kept[0]
+        youtube_at = kept[1]
+    print("feeds read:", len(feeds), "| failed:", "; ".join(failed) or "none",
+          "| YouTube:", "no key" if not YT_KEY else "kept from " + youtube_at if kept else "collected")
     if not any(feed["items"] for feed in feeds):
         sys.exit("every feed failed or was empty: nothing written")
     with open(out_path, "w", encoding="utf-8") as handle:
-        json.dump({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "feeds": feeds, "failed": failed}, handle, ensure_ascii=False, indent=1)
+        json.dump({"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "youtube_at": youtube_at, "feeds": feeds, "failed": failed}, handle, ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":

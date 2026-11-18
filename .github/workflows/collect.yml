@@ -2,9 +2,11 @@ name: collect
 
 on:
   schedule:
-    # Hourly, 25 minutes before the Hype Radar scout runs, off the busy top of the hour.
-    # GitHub starts these late and drops some slots when it is busy (gaps of two hours seen on 2026-11-18).
+    # Twice an hour, off the busy top of the hour; the Hype Radar scout reads the file at :12.
+    # GitHub starts these late and drops some slots when it is busy (gaps of two hours seen on 2026-11-18 with one
+    # slot an hour), hence two. collect.py reuses the YouTube feeds for 50 minutes, so the extra runs cost no quota.
     - cron: "47 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
   push:
     branches-ignore: [data]
