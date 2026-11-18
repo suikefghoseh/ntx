@@ -3,6 +3,7 @@
 import csv
 import datetime
 import html
+import http.client
 import io
 import json
 import re
@@ -46,12 +47,22 @@ def clean(text, limit):
     return " ".join(str(text or "").replace("|", "/").split())[:limit]
 
 
-def fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+def fetch(url, head=0):
+    """The body of a URL. With head, only about that many bytes from its start are wanted, so a cut-off download will do."""
+    headers = {"User-Agent": UA, "Accept": "*/*"}
+    if head:
+        headers["Range"] = "bytes=0-" + str(head - 1)
+    request = urllib.request.Request(url, headers=headers)
     for attempt in (1, 2):
         try:
             with urllib.request.urlopen(request, timeout=25) as response:
                 return response.read()
+        except http.client.IncompleteRead as error:
+            if head and error.partial:
+                return error.partial
+            if attempt == 2:
+                raise
+            time.sleep(3)
         except OSError:
             if attempt == 2:
                 raise
@@ -198,7 +209,8 @@ def spotify_gainers(limit):
 
 
 def netflix():
-    text = fetch("https://www.netflix.com/tudum/top10/data/all-weeks-global.tsv").decode("utf-8", "replace")
+    # The file holds every week since 2021, latest first: the first 80 KB cover the latest week many times over.
+    text = fetch("https://www.netflix.com/tudum/top10/data/all-weeks-global.tsv", 80000).decode("utf-8", "replace")
     week, out = None, []
     for row in csv.DictReader(io.StringIO(text), delimiter="\t", quoting=csv.QUOTE_NONE):
         week = week or row.get("week")
