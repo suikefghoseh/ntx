@@ -19,6 +19,11 @@ ROBLOX_STEPS = (10000, 25000, 50000, 100000, 250000, 500000, 1000000)
 ROBLOX_SURGE_CCU = 20000
 ROBLOX_SURGE_TIMES = 2.0
 ROBLOX_STALE_HOURS = 12   # a snapshot older than this is not judged
+ROBLOX_FIRST_SIGHT_DAYS = 7   # a game this young may alert the first time the tracker lists it
+
+
+def step_of(players):
+    return max([step for step in ROBLOX_STEPS if players >= step], default=0)
 
 
 def stamp(moment):
@@ -98,9 +103,16 @@ def roblox_alerts(summary, state, now):
         url = "https://www.roblox.com/games/" + str(number(game[at["place"]]))
         stepped = False
         if created and latest - created < new_seconds:
-            reached = max([step for step in ROBLOX_STEPS if ccu >= step], default=0)
-            kept[gid] = max(reached, number(steps.get(gid)))
-            stepped = reached > number(steps.get(gid))
+            reached = step_of(ccu)
+            if gid in steps:
+                prior = number(steps[gid])
+            elif latest - created < ROBLOX_FIRST_SIGHT_DAYS * 86400:
+                prior = step_of(before)   # a game days old, seen for the first time: judged against a day ago
+            else:   # first seen with a history: where it has already been is not news
+                prior = step_of(max(ccu, number(game[at["peak7d"]]), number(game[at["peakAll"]])))
+            kept[gid] = max(reached, prior)
+            # Players rise and fall through the day, so a step it was already above a day ago is not a breakout.
+            stepped = reached > prior and before < reached
             if stepped and not seeding:
                 days = max(0, (latest - created) // 86400)
                 was = f", {before:,} a day ago" if before else ""
