@@ -243,15 +243,18 @@ def main(argv):
     now = datetime.datetime.now(UTC)
     adopt_seed(data_dir)
     reason = not_due(state, data_dir, now)
-    if argv[1] == "due":
-        print("due" if not reason else "not due: " + reason)
-        sys.exit(1 if reason else 0)
-    if reason:
+    if reason:   # the status file is the only log that can be read from outside, so it says why nothing ran
         print("not due: " + reason)
+        state["idle"] = {"at": stamp(now), "why": reason}
+    elif argv[1] == "due":
+        print("due")
         return
-    last = run(state, data_dir, now)
+    else:
+        last = run(state, data_dir, now)
     with open(state_path, "w", encoding="utf-8") as handle:
         json.dump(state, handle, ensure_ascii=False, indent=1)
+    if reason:
+        sys.exit(1 if argv[1] == "due" else 0)
     print(f"scout {last['outcome']}: {last['detail'] or last['merge']} (${last['usd']}, month ${state['usd']})")
 
 
