@@ -8,9 +8,11 @@ on:
     - cron: "47 * * * *"
     - cron: "17 * * * *"
   workflow_dispatch:
+  # GitHub fires only a few of those slots a day for this repository (about six, measured 2026-11-18 to 11-23),
+  # so the Hype Radar copy routine also pushes the file `tick` to the branch `tick` every hour: that starts a run at once.
   push:
     branches-ignore: [data]
-    paths: ["collect.py", "hype.py", "scout.py", ".github/workflows/collect.yml"]
+    paths: ["collect.py", "hype.py", "scout.py", "tick", ".github/workflows/collect.yml"]
 
 permissions:
   contents: write # push the feed file to the data branch
