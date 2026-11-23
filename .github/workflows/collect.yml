@@ -63,8 +63,8 @@ jobs:
 
       - name: Scout
         env:
-          # Claude API key; when the secret is missing the trend list is simply carried over unchanged.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Claude API key, stored as the repository secret CLAUDE_KEY; when it is missing the trend list is simply carried over unchanged.
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_KEY }}
         run: |
           # scout.py decides when a run is due (every two hours, under a monthly spend cap).
           # A failed run keeps the previous trends.json and never stops the feeds from being saved.

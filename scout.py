@@ -114,7 +114,7 @@ def adopt_seed(data_dir):
 def not_due(state, data_dir, now):
     """Why no call should be made now, or an empty string when one is due."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        return "no ANTHROPIC_API_KEY secret"
+        return "no API key (repository secret CLAUDE_KEY)"
     if not os.path.isfile(os.path.join(data_dir, "trends.json")):
         return "no trends.json to build on"
     wait = RETRY_MINUTES if state.get("free_fail") else EVERY_MINUTES
