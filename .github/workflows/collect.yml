@@ -12,7 +12,7 @@ on:
   # so the Hype Radar copy routine also pushes the file `tick` to main every hour: that starts a run at once.
   push:
     branches-ignore: [data]
-    paths: ["collect.py", "hype.py", "scout.py", "tick", ".github/workflows/collect.yml"]
+    paths: ["collect.py", "hype.py", "scout.py", "alerts.py", "tick", ".github/workflows/collect.yml"]
 
 permissions:
   contents: write # push the feed file to the data branch
@@ -47,7 +47,7 @@ jobs:
             git init -q prev
             git -C prev fetch -q --depth 1 "$REPO_URL" data
             git -C prev checkout -q FETCH_HEAD
-            for f in trends.json scout.json; do
+            for f in trends.json scout.json alerts.json; do
               if [ -f "prev/$f" ]; then cp "prev/$f" data/; fi
             done
           elif [ $? -ne 2 ]; then
@@ -74,6 +74,12 @@ jobs:
               && "$RUNNER_TEMP/venv/bin/python" code/scout.py run data; } || echo "scout failed, previous trends kept"
           fi
 
+      - name: Alerts
+        run: |
+          # Major breakouts on the Hype Radar list and in the Roblox tracker go into alerts.json; a Cloudflare Worker
+          # reads that file every few minutes and sends each new alert to my phone through ntfy.
+          python3 code/alerts.py data || echo "alerts failed, the previous alerts file is kept"
+
       - name: Save
         working-directory: data
         run: |
@@ -82,7 +88,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds.json
-          for f in trends.json scout.json; do
+          for f in trends.json scout.json alerts.json; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           git commit -q -m "feeds: $(date -u +%Y-%m-%dT%H:%MZ)"

@@ -15,7 +15,7 @@ import urllib.request
 import hype
 
 MODEL = "claude-sonnet-5-5"
-EVERY_MINUTES = 110    # a run is due this long after the last attempt (the workflow fires twice an hour)
+EVERY_MINUTES = 50     # a run is due this long after the last attempt: hourly, so a breakout is alerted promptly
 RETRY_MINUTES = 25     # or this long after an attempt that failed before anything was billed
 CAP_USD = 150.0        # no more calls this calendar month once the estimated spend reaches this
 SEARCHES = 6           # web searches per run; twice that while hype.py reports a short list
