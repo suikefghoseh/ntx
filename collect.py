@@ -17,6 +17,7 @@ from email.utils import parsedate_to_datetime
 
 UTC = datetime.timezone.utc
 UA = "Mozilla/5.0 (compatible; trend-feed-collector/1.0)"
+BUDGET_SECONDS = 240   # feeds not started within this long are skipped for the run; a stalled one costs up to 53 seconds
 WIKI_SKIP = ("Special:", "Wikipedia:", "Portal:", "File:", "Help:", "Category:", "Template:", "Talk:", "User:")
 # Google News searches of the last 24 hours. The letters are the scout's focus areas (A social media trends, B screen and
 # music, C games, creators and fads, D what 5 to 8 year olds like); "" is shown on every run.
@@ -348,7 +349,11 @@ def main(out_path):
     for focus, query in WEEK_NEWS:
         jobs.append((focus, "Google News, last 7 days: " + query, lambda query=query: news(query, now, 7)))
     feeds, failed = [], []
+    started = time.monotonic()
     for focus, label, getter in jobs:
+        if time.monotonic() - started > BUDGET_SECONDS:   # a source that stalls must not keep the scout and the save waiting
+            failed.append(label + " (out of time)")
+            continue
         try:
             items = getter()
         except Exception as error:  # one dead feed must not stop the others
