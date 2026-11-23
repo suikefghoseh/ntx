@@ -18,7 +18,7 @@ from email.utils import parsedate_to_datetime
 UTC = datetime.timezone.utc
 UA = "Mozilla/5.0 (compatible; trend-feed-collector/1.0)"
 WIKI_SKIP = ("Special:", "Wikipedia:", "Portal:", "File:", "Help:", "Category:", "Template:", "Talk:", "User:")
-# Google News searches of the last 24 hours. The letters are the scout's focus areas (A short-form video, B screen and
+# Google News searches of the last 24 hours. The letters are the scout's focus areas (A social media trends, B screen and
 # music, C games, creators and fads, D what 5 to 8 year olds like); "" is shown on every run.
 NEWS = (
     ("", '"gen z" OR "gen alpha" trend'),
@@ -26,7 +26,6 @@ NEWS = (
     ("A", "viral meme"),
     ("A", '"going viral" tiktok'),
     ("A", "brainrot"),
-    ("A", '"youtube shorts" trend OR viral'),
     ("A", '"tiktok sound" OR "tiktok song" OR "tiktok dance"'),
     ("A", 'slang "gen alpha" OR "gen z" meaning'),
     ("B", "new trailer"),
@@ -42,10 +41,16 @@ NEWS = (
     ("D", '"animated movie" OR "family movie" trailer'),
     ("D", '"youtube kids" OR "kids youtuber" OR "kids channel"'),
 )
-# YouTube Data API key, from the repository secret of the same name. Without it the YouTube feeds are left out.
+# Google News searches of the last 7 days: roundups and explainers of the social media trends that have grown big,
+# which a one-day search misses. Single posts are not wanted, so no feed lists individual videos by views.
+WEEK_NEWS = (
+    ("A", '"tiktok trends" OR "viral trends" this week'),
+    ("A", 'meme explained "gen alpha" OR "gen z" OR tiktok'),
+    ("A", '"trending sound" OR "trending audio" OR "viral song" tiktok OR reels'),
+    ("A", '"viral trend" OR "tiktok trend" kids OR teens OR school'),
+)
+# YouTube Data API key, from the repository secret of the same name. Without it the YouTube feed is left out.
 YT_KEY = os.environ.get("YT_API_KEY", "").strip()
-# Shorts searches cost 100 of the 10,000 free quota units a day each, so every run does one half: even hours, odd hours.
-YT_SEARCHES = (("brainrot", "tiktok trend", "roblox #shorts"), ("dance challenge", "toys #shorts", "meme #shorts"))
 
 
 def clean(text, limit):
@@ -162,10 +167,10 @@ def rss(url, limit, now, max_hours, skip=()):
     return out
 
 
-def news(query, now):
-    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query + " when:1d") + "&hl=en-US&gl=US&ceid=US:en"
+def news(query, now, days=1):
+    url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query + " when:" + str(days) + "d") + "&hl=en-US&gl=US&ceid=US:en"
     time.sleep(1)
-    return rss(url, 6, now, 30)
+    return rss(url, 6 if days == 1 else 8, now, days * 24 + 6)
 
 
 def tokchart(path, limit):
@@ -300,28 +305,16 @@ def youtube_trending(now):
     return video_lines(videos.get("items") or [], now, 20)
 
 
-def youtube_shorts(query, now):
-    """The most viewed videos of up to 3 minutes posted in the last 48 hours that match a search."""
-    after = (now - datetime.timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    found = youtube("search?part=id&type=video&videoDuration=short&order=viewCount&regionCode=US&relevanceLanguage=en&maxResults=25"
-                    + "&publishedAfter=" + urllib.parse.quote(after) + "&q=" + urllib.parse.quote(query))
-    ids = [item["id"]["videoId"] for item in found.get("items") or [] if (item.get("id") or {}).get("videoId")]
-    if not ids:
-        return []
-    videos = youtube("videos?part=snippet,contentDetails,statistics&maxResults=50&id=" + ",".join(ids))
-    return video_lines(videos.get("items") or [], now, 10, longest=180, english=True)
-
-
 def carried_youtube(now):
-    """(feeds, time) of the YouTube feeds in the published file while they are under 50 minutes old, else None.
-    The searches use most of the day's free quota at one round an hour, and this workflow can start more often than that."""
+    """(feeds, time) of the YouTube trending feed in the published file while it is under 50 minutes old, else None.
+    The chart moves slowly and this workflow can start several times an hour."""
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not repo:
         return None
     try:
         old = json.loads(fetch("https://raw.githubusercontent.com/" + repo + "/data/feeds.json"))
         then = datetime.datetime.strptime(str(old["youtube_at"]), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-        feeds = [feed for feed in old["feeds"] if str(feed.get("label") or "").startswith("YouTube ") and feed.get("items")]
+        feeds = [feed for feed in old["feeds"] if str(feed.get("label") or "").startswith("YouTube trending") and feed.get("items")]
     except Exception:   # no published file yet, no YouTube feeds in it, or it cannot be read: collect afresh
         return None
     return (feeds, str(old["youtube_at"])) if feeds and 0 <= (now - then).total_seconds() < 50 * 60 else None
@@ -338,6 +331,7 @@ def main(out_path):
         ("", "Know Your Meme newsfeed", lambda: rss("https://knowyourmeme.com/newsfeed.rss", 12, now, 96)),
         ("A", "TikTok hashtags growing fastest this week, worldwide (growth)", lambda: tokchart("tiktok-trending-hashtags", 10)),
         ("A", "TikTok songs trending in the US today (artist, genre, new videos a day, growth)", lambda: tokchart("tiktok-trending-songs/united-states", 10)),
+        ("A", "TikTok songs trending worldwide this week (artist, genre, new videos a day, growth)", lambda: tokchart("tiktok-trending-songs", 10)),
         ("A", "Shazam US top 15 of the last 7 days (songs people hear in videos and look up)", lambda: shazam(15)),
         ("A", "Know Your Meme, memes confirmed in the last 30 days", lambda: rss("https://knowyourmeme.com/memes.rss", 12, now, 720)),
         ("B", "Spotify US, songs that gained the most plays since yesterday", lambda: spotify_gainers(12)),
@@ -349,10 +343,10 @@ def main(out_path):
     kept = carried_youtube(now) if YT_KEY else None
     if YT_KEY and not kept:
         jobs.append(("BC", "YouTube trending in the US now (channel, views, age)", lambda: youtube_trending(now)))
-        for query in YT_SEARCHES[now.hour % 2]:
-            jobs.append(("A", "YouTube Shorts, most viewed of the last 48 hours for the search: " + query, lambda query=query: youtube_shorts(query, now)))
     for focus, query in NEWS:
         jobs.append((focus, "Google News, last 24h: " + query, lambda query=query: news(query, now)))
+    for focus, query in WEEK_NEWS:
+        jobs.append((focus, "Google News, last 7 days: " + query, lambda query=query: news(query, now, 7)))
     feeds, failed = [], []
     for focus, label, getter in jobs:
         try:

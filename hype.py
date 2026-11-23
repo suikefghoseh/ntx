@@ -8,7 +8,9 @@ import sys
 UTC = datetime.timezone.utc
 CATS = ("tiktok", "meme", "movie-tv", "anime", "game", "music", "creator", "toy-fad", "sports", "other")
 BANDS = ("5-8", "9-12", "13-18")                                 # age bands a trend is tagged with
-SHORT = ("sound", "challenge", "character", "slang", "format")   # kinds of short-form video trend
+SHORT = ("sound", "challenge", "character", "slang", "format")   # kinds of social media trend
+SOCIAL_CATS = ("tiktok", "meme")   # categories that are social media trends even without a kind
+SOCIAL_FIT = 4         # a new social media trend needs this fit: most players of its ages have seen it
 MOM = {"rising": 1.0, "steady": 0.8, "fading": 0.5}   # weight of each momentum in the hot score
 HALF_LIFE_DAYS = 4.0   # freshness halves every 4 days
 KEEP = 80              # most rows kept
@@ -23,12 +25,12 @@ COLS = ("id", "title", "cat", "what", "angle", "evidence", "url", "pop", "mom", 
         "first_seen", "last_seen", "checks", "change", "hot", "trail",
         "ages", "short", "keys", "change7", "rb_games", "rb_ccu", "rb_new", "rb_top")
 FOCUS = {
-    "A": "short-form video: TikTok, YouTube Shorts and Reels trends, sounds, dances, challenges, memes, brainrot characters and slang",
+    "A": "major social media trends: the sounds, dances, challenges, memes, brainrot characters, slang and video formats that many accounts are copying on TikTok, Instagram Reels, YouTube Shorts and Snapchat",
     "B": "films, series, anime and music that are about to release or just released with hype",
     "C": "games, creators, streamers, toys, collectibles, snacks and other fads",
     "D": "what 5 to 8 year olds are into: cartoons and kids' shows, family films, kids' YouTube channels, toys, tablet games, playground crazes",
 }
-ROTA = "ABACD"   # the focus of each hour in turn: short-form video gets two runs in five
+ROTA = "ABACD"   # the focus of each hour in turn: social media trends get two runs in five
 
 
 def now_utc():
@@ -150,7 +152,7 @@ def brief(old_path, feeds_path, out_path):
         lines.append("BUILDING UP: the list is still short. Cover every focus area: " + "; ".join(f"{l} = {t}" for l, t in FOCUS.items()))
     else:
         lines.append(f"FOCUS THIS RUN: {letter} = {FOCUS[letter]}")
-    mix = [f"short-form {sum(1 for r in rows if r.get('short') in SHORT)}"]
+    mix = [f"social media trends {sum(1 for r in rows if r.get('short') in SHORT)}"]
     mix += [f"ages {band} {sum(1 for r in rows if band in bands_of(r.get('ages')))}" for band in BANDS]
     lines.append(f"MIX NOW, of {len(rows)} rows: " + ", ".join(mix))
     lines += ["", f"KNOWN TRENDS: {len(rows)} (id | title | category | popularity | momentum | took off | hours since last check | ages)"]
@@ -250,7 +252,8 @@ def merge(old_path, found_path, out_path, roblox_path="none"):
                 fit = as_int(parts[7], 1, 5, 3)
                 row = rows.get(rid)
                 if row is None:
-                    if fit < 3:
+                    social = parts[2].lower() in SOCIAL_CATS or (len(parts) == 15 and parts[13].lower() in SHORT)
+                    if fit < (SOCIAL_FIT if social else 3):
                         low_fit += 1
                         continue
                     row = {"id": rid, "first_seen": now_text, "checks": 0, "trail": ""}
@@ -335,7 +338,7 @@ def merge(old_path, found_path, out_path, roblox_path="none"):
         {"label": "Last check", "value": now_text},
         {"label": "Popularity", "value": "0 to 100, judged by Claude from the evidence on each row, among the age bands the row is tagged with. An estimate, not a measured count."},
         {"label": "Hot score", "value": "popularity x (0.3 + 0.7 x 0.5^(days since it took off or to its release / 4)) x momentum (rising 1, steady 0.8, fading 0.5) x (0.9 + 24h change / 100, change limited to 10 either way)"},
-        {"label": "Ages and short-form kind", "value": "Tags chosen by Claude: which of the bands 5-8, 9-12 and 13-18 know the trend, and whether it spreads through short videos as a sound, challenge, character, slang word or format."},
+        {"label": "Ages and social media kind", "value": "Tags chosen by Claude: which of the bands 5-8, 9-12 and 13-18 know the trend, and what kind of social media trend it is: a sound, challenge, character, slang word or format. A single video or post is never listed, only trends many accounts take part in."},
         {"label": "On Roblox", "value": "Games in the Roblox Trend Tracker's list whose name contains one of the row's search words (keys, chosen by Claude), the players in them, how many were created in the last 30 days, and the biggest one. " + (f"List read at {games_read}, {len(games)} games." if games else "The list could not be read this run, so the counts are from an earlier run.")},
         {"label": "hype.py", "value": code, "type": "code", "lang": "python"},
     ]
