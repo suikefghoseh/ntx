@@ -2,7 +2,7 @@ name: collect
 
 on:
   schedule:
-    # Twice an hour, off the busy top of the hour; the Hype Radar scout reads the file at :12.
+    # Twice an hour, off the busy top of the hour; the Hype Radar copy routine reads the data branch at :27.
     # GitHub starts these late and drops some slots when it is busy (gaps of two hours seen on 2026-11-18 with one
     # slot an hour), hence two. collect.py reuses the YouTube feeds for 50 minutes, so the extra runs cost no quota.
     - cron: "47 * * * *"
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches-ignore: [data]
-    paths: ["collect.py", ".github/workflows/collect.yml"]
+    paths: ["collect.py", "hype.py", "scout.py", ".github/workflows/collect.yml"]
 
 permissions:
   contents: write # push the feed file to the data branch
@@ -23,7 +23,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 20
     env:
       GITHUB_TOKEN: ${{ github.token }}
       REPO_URL: https://github.com/${{ github.repository }}.git
@@ -36,13 +36,41 @@ jobs:
           git -C code fetch -q --depth 1 "$REPO_URL" "$GITHUB_SHA"
           git -C code checkout -q FETCH_HEAD
 
+      - name: Previous data
+        run: |
+          # The data branch is rebuilt from scratch below, so the scout's files are carried over from it.
+          # If the branch exists but cannot be read, stop: pushing without them would lose the trend list.
+          mkdir data
+          if git ls-remote --exit-code "$REPO_URL" refs/heads/data > /dev/null; then
+            git init -q prev
+            git -C prev fetch -q --depth 1 "$REPO_URL" data
+            git -C prev checkout -q FETCH_HEAD
+            for f in trends.json scout.json; do
+              if [ -f "prev/$f" ]; then cp "prev/$f" data/; fi
+            done
+          elif [ $? -ne 2 ]; then
+            echo "cannot reach the data branch"; exit 1
+          fi
+
       - name: Collect
         env:
           # YouTube Data API key; when the secret is missing the YouTube feeds are simply left out.
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
         run: |
-          mkdir data
           python3 code/collect.py data/feeds.json
+
+      - name: Scout
+        env:
+          # Claude API key; when the secret is missing the trend list is simply carried over unchanged.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # scout.py decides when a run is due (every two hours, under a monthly spend cap).
+          # A failed run keeps the previous trends.json and never stops the feeds from being saved.
+          if python3 code/scout.py due data; then
+            { python3 -m venv "$RUNNER_TEMP/venv" \
+              && "$RUNNER_TEMP/venv/bin/pip" install -q "anthropic>=1.1,<2" \
+              && "$RUNNER_TEMP/venv/bin/python" code/scout.py run data; } || echo "scout failed, previous trends kept"
+          fi
 
       - name: Save
         working-directory: data
@@ -52,6 +80,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds.json
+          for f in trends.json scout.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           git commit -q -m "feeds: $(date -u +%Y-%m-%dT%H:%MZ)"
           git push -q --force "$REPO_URL" HEAD:data
 
