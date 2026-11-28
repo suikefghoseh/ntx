@@ -1,0 +1,31 @@
+{
+ "idle": {
+  "at": "2026-11-28T15:28:37Z",
+  "why": "last attempt 29 minutes ago, next after 50"
+ },
+ "month": "2026-11",
+ "usd": 12.8005,
+ "runs": 125,
+ "cap_usd": 150.0,
+ "last_attempt": "2026-11-28T14:58:55Z",
+ "free_fail": false,
+ "last_ok": "2026-11-28T14:58:55Z",
+ "last": {
+  "at": "2026-11-28T14:58:55Z",
+  "outcome": "ok",
+  "detail": "",
+  "model": "claude-sonnet-5-5",
+  "stop": "end_turn",
+  "lines": 13,
+  "tokens": {
+   "input": 12,
+   "cache_write": 23229,
+   "cache_read": 73869,
+   "output": 1887,
+   "search": 6
+  },
+  "usd": 0.1444,
+  "seconds": 26,
+  "merge": "added 3: primal-hatch-megalodon-toy, bluey-heeler-house-toy-2026, dasher-disney-plus-reindeer-film / updated 10; tagged 0; dropped 0: none / total now 60; skipped for low fit 0; Roblox list: 2926 games read / hottest: Pokémon Winds and Waves (game and anime return) (58); Tickle Me Elmo Giggle Max (holiday toy) (44); Hexed (Disney animated film) (44)"
+ }
+}
